@@ -10,6 +10,7 @@ import {
   type MonedaBncr,
 } from "@/lib/bncr/formato";
 import { getSupabaseAdminClient, manejarErrorSupabase } from "@/lib/supabase/admin";
+import { contextoTenant } from "@/lib/tenant";
 import type {
   Beneficiario,
   Lote,
@@ -71,7 +72,11 @@ async function cargarBeneficiarios(
   ids: string[],
 ): Promise<Map<string, Beneficiario>> {
   const supabase = getSupabaseAdminClient();
-  const { data, error } = await supabase.from(TABLA_BENEFICIARIO[tipo]).select("*").in("id", ids);
+  const { data, error } = await supabase
+    .from(TABLA_BENEFICIARIO[tipo])
+    .select("*")
+    .eq("inquilino_id", contextoTenant().inquilino_id)
+    .in("id", ids);
   if (error) manejarErrorSupabase(error);
   return new Map((data as Beneficiario[]).map((fila) => [fila.id, fila]));
 }
@@ -128,9 +133,11 @@ export async function crearLote(entrada: EntradaLote): Promise<LoteGenerado> {
   }));
 
   const supabase = getSupabaseAdminClient();
+  const tenant = contextoTenant();
   const { data: filaLote, error: errorLote } = await supabase
     .from("bncr_lotes")
     .insert({
+      ...tenant,
       tipo: entrada.tipo,
       descripcion: entrada.descripcion.trim(),
       cuenta_debito: entrada.cuenta_debito,
@@ -172,10 +179,12 @@ export async function crearLote(entrada: EntradaLote): Promise<LoteGenerado> {
       .from("bncr_detalles_pago")
       .insert(
         preparados.map((detalle, indice) => ({
+          ...tenant,
           lote_id: lote.id,
           beneficiario_tipo: tipoBeneficiario,
           empleado_id: tipoBeneficiario === "empleado" ? detalle.beneficiario.id : null,
           proveedor_id: tipoBeneficiario === "proveedor" ? detalle.beneficiario.id : null,
+          planilla_empleado_id: detalle.beneficiario.planilla_empleado_id ?? null,
           nombre_beneficiario: detalle.beneficiario.nombre,
           cedula: detalle.beneficiario.cedula,
           cuenta_cliente: detalle.beneficiario.cuenta_cliente,
@@ -194,6 +203,7 @@ export async function crearLote(entrada: EntradaLote): Promise<LoteGenerado> {
 
     const rubros = preparados.flatMap((detalle, indice) =>
       detalle.rubros.map((rubro) => ({
+        ...tenant,
         detalle_id: idPorLinea.get(indice + 1)!,
         descripcion: rubro.descripcion.trim() || "PAGO",
         numero_factura: rubro.numero_factura?.trim() || null,
@@ -208,6 +218,7 @@ export async function crearLote(entrada: EntradaLote): Promise<LoteGenerado> {
       .from("bncr_lotes")
       .update({ nombre_archivo: nombreArchivo, contenido: archivo.contenido })
       .eq("id", lote.id)
+      .eq("inquilino_id", tenant.inquilino_id)
       .select("*")
       .single();
 
@@ -223,7 +234,11 @@ export async function crearLote(entrada: EntradaLote): Promise<LoteGenerado> {
 
 export async function listarLotes(tipo?: TipoLote): Promise<Lote[]> {
   const supabase = getSupabaseAdminClient();
-  let consulta = supabase.from("bncr_lotes").select("*").order("created_at", { ascending: false });
+  let consulta = supabase
+    .from("bncr_lotes")
+    .select("*")
+    .eq("inquilino_id", contextoTenant().inquilino_id)
+    .order("created_at", { ascending: false });
   if (tipo) consulta = consulta.eq("tipo", tipo);
 
   const { data, error } = await consulta;
@@ -237,6 +252,7 @@ export async function obtenerLote(id: string): Promise<LoteConDetalles> {
     .from("bncr_lotes")
     .select(SELECT_LOTE_CON_DETALLES)
     .eq("id", id)
+    .eq("inquilino_id", contextoTenant().inquilino_id)
     .single();
 
   if (error) manejarErrorSupabase(error);
@@ -257,6 +273,7 @@ export async function historialBeneficiario(
       "*, bncr_rubros_pago(*), bncr_lotes(id, consecutivo, tipo, descripcion, fecha_aplicacion, moneda, nombre_archivo)",
     )
     .eq(columna, beneficiarioId)
+    .eq("inquilino_id", contextoTenant().inquilino_id)
     .order("created_at", { ascending: false });
 
   if (error) manejarErrorSupabase(error);

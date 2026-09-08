@@ -5,13 +5,21 @@ export type TipoBeneficiario = "empleado" | "proveedor";
 /** Un lote de planilla paga empleados; uno de proveedores paga facturas. */
 export type TipoLote = "planilla" | "proveedores";
 
-export interface Beneficiario {
+/** Columnas de aislamiento que lleva toda tabla de la base centralizada del portal. */
+export interface CamposTenant {
+  inquilino_id: string;
+  empresa_id: string;
+}
+
+export interface Beneficiario extends CamposTenant {
   id: string;
   cedula: string;
   nombre: string;
   cuenta_cliente: string;
   activo: boolean;
   created_at: string;
+  /** Solo empleados: colaborador correspondiente en `planillas_empleados`. */
+  planilla_empleado_id?: string | null;
   /** Solo empleados. */
   puesto?: string | null;
   /** Solo proveedores. */
@@ -26,12 +34,13 @@ export interface RubroPago {
   monto_centimos: number;
 }
 
-export interface DetallePago {
+export interface DetallePago extends CamposTenant {
   id: string;
   lote_id: string;
   beneficiario_tipo: TipoBeneficiario;
   empleado_id: string | null;
   proveedor_id: string | null;
+  planilla_empleado_id: string | null;
   nombre_beneficiario: string;
   cedula: string;
   cuenta_cliente: string;
@@ -41,7 +50,7 @@ export interface DetallePago {
   bncr_rubros_pago?: RubroPago[];
 }
 
-export interface Lote {
+export interface Lote extends CamposTenant {
   id: string;
   consecutivo: number;
   tipo: TipoLote;

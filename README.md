@@ -15,8 +15,20 @@ Next.js (App Router) + TypeScript + TailwindCSS, Supabase (PostgreSQL) y desplie
 
 1. `npm install`
 2. Copiar `.env.example` a `.env.local` y completar las variables.
-3. Ejecutar `supabase/migrations/0001_bncr_pagos_masivos.sql` en el SQL Editor de la instancia de Supabase existente. Solo crea tablas nuevas con prefijo `bncr_`; no toca las tablas actuales.
+3. Ejecutar `supabase/migrations/0001_bncr_pagos_masivos.sql` en el SQL Editor de la base centralizada del portal. Solo agrega tablas nuevas con prefijo `bncr_` en el esquema `public`; no toca las tablas actuales.
 4. `npm run dev`
+
+## Multi-tenant
+
+Todo corre sobre la **misma base de datos** del portal. Cada tabla `bncr_` lleva `inquilino_id` y `empresa_id`, con RLS y la política estándar de aislamiento:
+
+```sql
+using (inquilino_id = (auth.jwt() ->> 'inquilino_id')::uuid)
+```
+
+Como las escrituras del módulo pasan por el servidor con el service role (que se salta RLS), el filtro por `inquilino_id` se aplica además en la capa de datos (`src/lib/tenant.ts`), que toma los valores de `INQUILINO_ID` y `EMPRESA_ID`.
+
+Los empleados del catálogo se enlazan al colaborador del módulo de planilla con `planilla_empleado_id → planillas_empleados(id)`; la FK se crea solo si esa tabla ya existe en la base.
 
 ## Comandos
 

@@ -2,6 +2,7 @@ import "server-only";
 
 import { esCuentaClienteValida, normalizarCuentaCliente, soloDigitos } from "@/lib/bncr/formato";
 import { getSupabaseAdminClient, manejarErrorSupabase } from "@/lib/supabase/admin";
+import { contextoTenant } from "@/lib/tenant";
 import type { Beneficiario, TipoBeneficiario } from "@/lib/tipos";
 
 const TABLA: Record<TipoBeneficiario, string> = {
@@ -26,6 +27,8 @@ export interface ValoresBeneficiario {
   activo: boolean;
   /** `puesto` para empleados, `correo` para proveedores. */
   extra: string | null;
+  /** Colaborador de `planillas_empleados` al que corresponde este empleado. */
+  planilla_empleado_id?: string | null;
 }
 
 interface CuerpoBeneficiario {
@@ -34,6 +37,7 @@ interface CuerpoBeneficiario {
   cuenta_cliente?: string;
   activo?: boolean;
   extra?: string | null;
+  planilla_empleado_id?: string | null;
 }
 
 export function valoresDesdeCuerpo(cuerpo: unknown): ValoresBeneficiario {
@@ -44,6 +48,7 @@ export function valoresDesdeCuerpo(cuerpo: unknown): ValoresBeneficiario {
     cuenta_cliente: datos.cuenta_cliente ?? "",
     activo: datos.activo ?? true,
     extra: datos.extra ?? null,
+    planilla_empleado_id: datos.planilla_empleado_id ?? null,
   };
 }
 
@@ -66,6 +71,7 @@ function normalizar(tipo: TipoBeneficiario, valores: ValoresBeneficiario) {
     cuenta_cliente: cuenta,
     activo: valores.activo,
     [CAMPO_EXTRA[tipo]]: valores.extra?.trim() || null,
+    ...(tipo === "empleado" ? { planilla_empleado_id: valores.planilla_empleado_id ?? null } : {}),
   };
 }
 
@@ -74,7 +80,12 @@ export async function listarBeneficiarios(
   busqueda = "",
 ): Promise<Beneficiario[]> {
   const supabase = getSupabaseAdminClient();
-  let consulta = supabase.from(TABLA[tipo]).select("*").order("nombre");
+  const { inquilino_id } = contextoTenant();
+  let consulta = supabase
+    .from(TABLA[tipo])
+    .select("*")
+    .eq("inquilino_id", inquilino_id)
+    .order("nombre");
   if (busqueda) consulta = consulta.or(`nombre.ilike.%${busqueda}%,cedula.ilike.%${busqueda}%`);
 
   const { data, error } = await consulta;
@@ -89,7 +100,7 @@ export async function crearBeneficiario(
   const supabase = getSupabaseAdminClient();
   const { data, error } = await supabase
     .from(TABLA[tipo])
-    .insert(normalizar(tipo, valores))
+    .insert({ ...normalizar(tipo, valores), ...contextoTenant() })
     .select("*")
     .single();
 
@@ -107,6 +118,7 @@ export async function actualizarBeneficiario(
     .from(TABLA[tipo])
     .update(normalizar(tipo, valores))
     .eq("id", id)
+    .eq("inquilino_id", contextoTenant().inquilino_id)
     .select("*")
     .single();
 
@@ -120,6 +132,10 @@ export async function actualizarBeneficiario(
  */
 export async function desactivarBeneficiario(tipo: TipoBeneficiario, id: string): Promise<void> {
   const supabase = getSupabaseAdminClient();
-  const { error } = await supabase.from(TABLA[tipo]).update({ activo: false }).eq("id", id);
+  const { error } = await supabase
+    .from(TABLA[tipo])
+    .update({ activo: false })
+    .eq("id", id)
+    .eq("inquilino_id", contextoTenant().inquilino_id);
   if (error) manejarErrorSupabase(error);
 }
