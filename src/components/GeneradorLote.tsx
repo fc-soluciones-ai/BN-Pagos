@@ -31,8 +31,8 @@ interface SeleccionadoUI {
 
 interface DatosLote {
   descripcion: string;
-  cuenta_debito: string;
-  cedula_empresa: string;
+  numero_cliente: string;
+  cuenta_origen: string;
   nombre_empresa: string;
   moneda: MonedaBncr;
   fecha_aplicacion: string;
@@ -80,12 +80,12 @@ export function GeneradorLote({ tipo }: { tipo: TipoLote }) {
 
   const [datos, setDatos] = useState<DatosLote>({
     descripcion: tipo === "planilla" ? "PLANILLA QUINCENAL" : "PAGO PROVEEDORES",
-    cuenta_debito: process.env.NEXT_PUBLIC_CUENTA_DEBITO ?? "",
-    cedula_empresa: process.env.NEXT_PUBLIC_EMPRESA_CEDULA ?? "",
+    numero_cliente: process.env.NEXT_PUBLIC_BNCR_NUMERO_CLIENTE ?? "",
+    cuenta_origen: process.env.NEXT_PUBLIC_BNCR_CUENTA_ORIGEN ?? "",
     nombre_empresa: process.env.NEXT_PUBLIC_EMPRESA_NOMBRE ?? "",
     moneda: "CRC",
     fecha_aplicacion: hoy(),
-    extension: "txt",
+    extension: "env",
   });
 
   useEffect(() => {
@@ -139,9 +139,9 @@ export function GeneradorLote({ tipo }: { tipo: TipoLote }) {
   const previa = useMemo(() => {
     const detalles = seleccion
       .map((fila) => ({
-        cuentaCliente: fila.beneficiario.cuenta_cliente,
         cedula: fila.beneficiario.cedula,
         nombre: fila.beneficiario.nombre,
+        banco: fila.beneficiario.banco,
         concepto: fila.concepto.trim() || conceptoAutomatico(tipo, fila.rubros),
         montoCentimos: montoDeRubros(fila.rubros),
       }))
@@ -150,12 +150,9 @@ export function GeneradorLote({ tipo }: { tipo: TipoLote }) {
     if (detalles.length === 0) return null;
     try {
       return construirArchivoBncr({
-        cedulaEmpresa: datos.cedula_empresa,
-        nombreEmpresa: datos.nombre_empresa,
-        cuentaDebito: datos.cuenta_debito,
-        moneda: datos.moneda,
+        numeroCliente: datos.numero_cliente,
+        cuentaOrigen: datos.cuenta_origen,
         fechaAplicacion: datos.fecha_aplicacion,
-        consecutivo: 0,
         descripcion: datos.descripcion,
         detalles,
       });
@@ -208,11 +205,12 @@ export function GeneradorLote({ tipo }: { tipo: TipoLote }) {
       <Card className="space-y-3">
         <h2 className="text-base font-bold text-slate-900">Datos del lote (encabezado tipo 1 y 2)</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <Field label="Cédula jurídica de la empresa">
+          <Field label="Número de cliente BNCR (6 dígitos)">
             <input
               className={inputClass}
-              value={datos.cedula_empresa}
-              onChange={(e) => setDatos({ ...datos, cedula_empresa: e.target.value })}
+              inputMode="numeric"
+              value={datos.numero_cliente}
+              onChange={(e) => setDatos({ ...datos, numero_cliente: e.target.value })}
             />
           </Field>
           <Field label="Nombre de la empresa">
@@ -222,11 +220,12 @@ export function GeneradorLote({ tipo }: { tipo: TipoLote }) {
               onChange={(e) => setDatos({ ...datos, nombre_empresa: e.target.value })}
             />
           </Field>
-          <Field label="Cuenta débito origen (17 dígitos)">
+          <Field label="Cuenta patronal a debitar (9 dígitos)">
             <input
               className={inputClass}
-              value={datos.cuenta_debito}
-              onChange={(e) => setDatos({ ...datos, cuenta_debito: e.target.value })}
+              inputMode="numeric"
+              value={datos.cuenta_origen}
+              onChange={(e) => setDatos({ ...datos, cuenta_origen: e.target.value })}
             />
           </Field>
           <Field label="Descripción del lote (30 caracteres)">
@@ -264,8 +263,8 @@ export function GeneradorLote({ tipo }: { tipo: TipoLote }) {
                   setDatos({ ...datos, extension: e.target.value as ExtensionArchivo })
                 }
               >
-                <option value="txt">.txt</option>
                 <option value="env">.env</option>
+                <option value="txt">.txt</option>
               </select>
             </Field>
           </div>
@@ -368,7 +367,7 @@ export function GeneradorLote({ tipo }: { tipo: TipoLote }) {
         <Card className="space-y-2">
           <h2 className="text-base font-bold text-slate-900">Vista previa del archivo</h2>
           <p className="text-xs text-slate-500">
-            El consecutivo del encabezado se asigna al generar; cada línea va en ancho fijo.
+            Cada línea mide 68 caracteres, igual que el archivo que el banco ya procesó.
           </p>
           <pre className="overflow-x-auto rounded-xl bg-slate-900 p-3 text-xs leading-5 text-slate-100">
             {previa.lineas.join("\n")}
@@ -435,7 +434,7 @@ function FilaBeneficiario({
         <div>
           <p className="text-sm font-semibold text-slate-900">{fila.beneficiario.nombre}</p>
           <p className="font-mono text-xs text-slate-500">
-            {fila.beneficiario.cedula} · {fila.beneficiario.cuenta_cliente}
+            {fila.beneficiario.cedula} · {fila.beneficiario.banco}
           </p>
         </div>
         <div className="flex items-center gap-3">

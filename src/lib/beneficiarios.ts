@@ -1,8 +1,13 @@
 import "server-only";
 
-import { esCuentaClienteValida, normalizarCuentaCliente, soloDigitos } from "@/lib/bncr/formato";
-import { getSupabaseAdminClient, manejarErrorSupabase } from "@/lib/supabase/admin";
-import { contextoTenant } from "@/lib/tenant";
+import {
+  codigoBancoDesde,
+  esIbanCostaRicaValido,
+  normalizarIban,
+  soloDigitos,
+} from "@/lib/bncr/formato";
+import { manejarErrorSupabase } from "@/lib/supabase/server";
+import { sesion } from "@/lib/tenant";
 import type { Beneficiario, TipoBeneficiario } from "@/lib/tipos";
 
 const TABLA: Record<TipoBeneficiario, string> = {
@@ -23,7 +28,8 @@ export function esTipoBeneficiario(valor: string): valor is TipoBeneficiario {
 export interface ValoresBeneficiario {
   cedula: string;
   nombre: string;
-  cuenta_cliente: string;
+  banco: string;
+  cuenta_iban: string;
   activo: boolean;
   /** `puesto` para empleados, `correo` para proveedores. */
   extra: string | null;
@@ -34,7 +40,8 @@ export interface ValoresBeneficiario {
 interface CuerpoBeneficiario {
   cedula?: string;
   nombre?: string;
-  cuenta_cliente?: string;
+  banco?: string;
+  cuenta_iban?: string;
   activo?: boolean;
   extra?: string | null;
   planilla_empleado_id?: string | null;
@@ -45,7 +52,8 @@ export function valoresDesdeCuerpo(cuerpo: unknown): ValoresBeneficiario {
   return {
     cedula: datos.cedula ?? "",
     nombre: datos.nombre ?? "",
-    cuenta_cliente: datos.cuenta_cliente ?? "",
+    banco: datos.banco ?? "",
+    cuenta_iban: datos.cuenta_iban ?? "",
     activo: datos.activo ?? true,
     extra: datos.extra ?? null,
     planilla_empleado_id: datos.planilla_empleado_id ?? null,
@@ -55,20 +63,32 @@ export function valoresDesdeCuerpo(cuerpo: unknown): ValoresBeneficiario {
 function normalizar(tipo: TipoBeneficiario, valores: ValoresBeneficiario) {
   const cedula = soloDigitos(valores.cedula);
   const nombre = valores.nombre.trim();
-  const cuenta = normalizarCuentaCliente(valores.cuenta_cliente);
+  const banco = valores.banco.trim();
+  const iban = normalizarIban(valores.cuenta_iban ?? "");
 
   if (!cedula) throw new Error("La cédula del beneficiario es obligatoria.");
-  if (!nombre) throw new Error("El nombre del beneficiario es obligatorio.");
-  if (!esCuentaClienteValida(cuenta)) {
+  if (cedula.length > 9) {
     throw new Error(
-      "La cuenta debe ser la cuenta cliente de 17 dígitos del BNCR (si tienes el IBAN de 22, pégalo y se convierte solo).",
+      "El archivo del BNCR identifica al beneficiario con una cédula de 9 dígitos; revisá el número digitado.",
     );
+  }
+  if (!nombre) throw new Error("El nombre del beneficiario es obligatorio.");
+  if (!codigoBancoDesde(banco)) {
+    throw new Error(
+      `No se reconoce el banco "${banco || "(vacío)"}". Elegí uno de la lista: sin el código de banco el archivo no se puede generar.`,
+    );
+  }
+  // El IBAN es opcional (no viaja en el archivo), pero si se digita tiene que
+  // estar bien: es lo que el cliente usa para verificar la cuenta destino.
+  if (iban && !esIbanCostaRicaValido(iban)) {
+    throw new Error("El IBAN de Costa Rica debe ser CR seguido de 20 dígitos (22 en total).");
   }
 
   return {
     cedula,
     nombre,
-    cuenta_cliente: cuenta,
+    banco,
+    cuenta_iban: iban || null,
     activo: valores.activo,
     [CAMPO_EXTRA[tipo]]: valores.extra?.trim() || null,
     ...(tipo === "empleado" ? { planilla_empleado_id: valores.planilla_empleado_id ?? null } : {}),
@@ -79,12 +99,11 @@ export async function listarBeneficiarios(
   tipo: TipoBeneficiario,
   busqueda = "",
 ): Promise<Beneficiario[]> {
-  const supabase = getSupabaseAdminClient();
-  const { inquilino_id } = contextoTenant();
+  const { supabase, tenant } = await sesion();
   let consulta = supabase
     .from(TABLA[tipo])
     .select("*")
-    .eq("inquilino_id", inquilino_id)
+    .eq("inquilino_id", tenant.inquilinoId)
     .order("nombre");
   if (busqueda) consulta = consulta.or(`nombre.ilike.%${busqueda}%,cedula.ilike.%${busqueda}%`);
 
@@ -97,10 +116,10 @@ export async function crearBeneficiario(
   tipo: TipoBeneficiario,
   valores: ValoresBeneficiario,
 ): Promise<Beneficiario> {
-  const supabase = getSupabaseAdminClient();
+  const { supabase, tenant } = await sesion();
   const { data, error } = await supabase
     .from(TABLA[tipo])
-    .insert({ ...normalizar(tipo, valores), ...contextoTenant() })
+    .insert({ ...normalizar(tipo, valores), inquilino_id: tenant.inquilinoId })
     .select("*")
     .single();
 
@@ -113,12 +132,12 @@ export async function actualizarBeneficiario(
   id: string,
   valores: ValoresBeneficiario,
 ): Promise<Beneficiario> {
-  const supabase = getSupabaseAdminClient();
+  const { supabase, tenant } = await sesion();
   const { data, error } = await supabase
     .from(TABLA[tipo])
     .update(normalizar(tipo, valores))
     .eq("id", id)
-    .eq("inquilino_id", contextoTenant().inquilino_id)
+    .eq("inquilino_id", tenant.inquilinoId)
     .select("*")
     .single();
 
@@ -131,11 +150,61 @@ export async function actualizarBeneficiario(
  * referencia al beneficiario para el historial de pagos.
  */
 export async function desactivarBeneficiario(tipo: TipoBeneficiario, id: string): Promise<void> {
-  const supabase = getSupabaseAdminClient();
+  const { supabase, tenant } = await sesion();
   const { error } = await supabase
     .from(TABLA[tipo])
     .update({ activo: false })
     .eq("id", id)
-    .eq("inquilino_id", contextoTenant().inquilino_id);
+    .eq("inquilino_id", tenant.inquilinoId);
   if (error) manejarErrorSupabase(error);
+}
+
+/** Colaborador del módulo de planilla, para enlazar el catálogo de empleados. */
+export interface ColaboradorPlanilla {
+  id: string;
+  cedula: string;
+  nombre_completo: string;
+  puesto: string | null;
+  iban: string | null;
+}
+
+interface FilaPlanilla {
+  id: string;
+  cedula: string;
+  nombre: string;
+  primer_apellido: string;
+  segundo_apellido: string | null;
+  puesto: string | null;
+  iban: string | null;
+}
+
+/**
+ * Colaboradores de `planillas_empleados` (la app de Planillas del portal) para
+ * poder enlazar cada empleado del catálogo con su ficha de RRHH. Si ese módulo
+ * todavía no está desplegado en la base, devuelve una lista vacía en vez de
+ * romper el catálogo.
+ */
+export async function listarColaboradoresPlanilla(): Promise<ColaboradorPlanilla[]> {
+  const { supabase, tenant } = await sesion();
+  const { data, error } = await supabase
+    .from("planillas_empleados")
+    .select("id, cedula, nombre, primer_apellido, segundo_apellido, puesto, iban")
+    .eq("inquilino_id", tenant.inquilinoId)
+    .eq("estado", "Activo")
+    .order("primer_apellido");
+
+  if (error) {
+    if (error.code === "42P01") return [];
+    manejarErrorSupabase(error);
+  }
+
+  return ((data ?? []) as FilaPlanilla[]).map((fila) => ({
+    id: fila.id,
+    cedula: fila.cedula,
+    nombre_completo: [fila.nombre, fila.primer_apellido, fila.segundo_apellido]
+      .filter(Boolean)
+      .join(" "),
+    puesto: fila.puesto,
+    iban: fila.iban,
+  }));
 }

@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 
+import { getPortalUrl } from "@/lib/portal-url";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -20,11 +22,19 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="es">
       <body className="min-h-screen">
         <header className="border-b border-slate-200 bg-white">
-          <div className="mx-auto max-w-5xl px-4 py-4">
-            <p className="text-lg font-bold uppercase tracking-wide text-red-700">BN Pagos</p>
-            <p className="text-sm text-slate-500">
-              Pagos masivos BNCR — planilla, proveedores y archivo de importación
-            </p>
+          <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 px-4 py-4">
+            <div>
+              <p className="text-lg font-bold uppercase tracking-wide text-red-700">BN Pagos</p>
+              <p className="text-sm text-slate-500">
+                Pagos masivos BNCR — planilla, proveedores y archivo de importación
+              </p>
+            </div>
+            <a
+              href={getPortalUrl()}
+              className="text-sm font-medium text-slate-600 hover:text-slate-900"
+            >
+              ← Volver al Portal
+            </a>
           </div>
         </header>
         <main className="mx-auto max-w-5xl space-y-4 px-4 py-6">{children}</main>

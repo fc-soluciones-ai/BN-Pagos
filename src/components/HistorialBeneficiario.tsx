@@ -47,7 +47,10 @@ export function HistorialBeneficiario({
         <li key={movimiento.id} className="text-xs text-slate-600">
           <p className="font-semibold text-slate-800">
             {movimiento.bncr_lotes?.fecha_aplicacion} · Lote #{movimiento.bncr_lotes?.consecutivo} ·{" "}
-            {formatearMonto(movimiento.monto_centimos, movimiento.bncr_lotes?.moneda ?? "CRC")}
+            {formatearMonto(
+              Math.round(movimiento.monto_pagar * 100),
+              movimiento.bncr_lotes?.moneda ?? "CRC",
+            )}
           </p>
           <p className="font-mono">{movimiento.concepto}</p>
           {(movimiento.bncr_rubros_pago ?? []).map((rubro) => (

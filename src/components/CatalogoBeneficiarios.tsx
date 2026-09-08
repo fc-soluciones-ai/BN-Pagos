@@ -5,18 +5,36 @@ import { useCallback, useEffect, useState } from "react";
 
 import { HistorialBeneficiario } from "@/components/HistorialBeneficiario";
 import { Alert, Button, Card, EmptyState, Field, Spinner, inputClass } from "@/components/ui";
-import { esCuentaClienteValida, normalizarCuentaCliente } from "@/lib/bncr/formato";
+import { BANCOS_SOPORTADOS, esIbanCostaRicaValido, normalizarIban } from "@/lib/bncr/formato";
 import { mensajeError } from "@/lib/errores";
 import type { Beneficiario, TipoBeneficiario } from "@/lib/tipos";
+
+/** Colaborador de la app de Planillas, para enlazar el empleado con su ficha de RRHH. */
+interface ColaboradorPlanilla {
+  id: string;
+  cedula: string;
+  nombre_completo: string;
+  puesto: string | null;
+  iban: string | null;
+}
 
 interface Formulario {
   cedula: string;
   nombre: string;
-  cuenta_cliente: string;
+  banco: string;
+  cuenta_iban: string;
   extra: string;
+  planilla_empleado_id: string;
 }
 
-const VACIO: Formulario = { cedula: "", nombre: "", cuenta_cliente: "", extra: "" };
+const VACIO: Formulario = {
+  cedula: "",
+  nombre: "",
+  banco: BANCOS_SOPORTADOS[0],
+  cuenta_iban: "",
+  extra: "",
+  planilla_empleado_id: "",
+};
 
 const ETIQUETA_EXTRA: Record<TipoBeneficiario, string> = {
   empleado: "Puesto",
@@ -38,6 +56,17 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
   const [form, setForm] = useState<Formulario>(VACIO);
   const [guardando, setGuardando] = useState(false);
   const [historialId, setHistorialId] = useState<string | null>(null);
+  const [colaboradores, setColaboradores] = useState<ColaboradorPlanilla[]>([]);
+
+  useEffect(() => {
+    if (tipo !== "empleado") return;
+    // Sin colaboradores el catálogo sigue sirviendo (el enlace es opcional),
+    // así que un fallo acá no se muestra como error de la pantalla.
+    void fetch("/api/planilla/colaboradores")
+      .then((res) => (res.ok ? res.json() : { colaboradores: [] }))
+      .then((json) => setColaboradores((json.colaboradores ?? []) as ColaboradorPlanilla[]))
+      .catch(() => setColaboradores([]));
+  }, [tipo]);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -59,8 +88,25 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
     return () => clearTimeout(temporizador);
   }, [cargar, busqueda]);
 
-  const cuentaNormalizada = normalizarCuentaCliente(form.cuenta_cliente);
-  const cuentaOk = esCuentaClienteValida(cuentaNormalizada);
+  const ibanNormalizado = normalizarIban(form.cuenta_iban);
+  const ibanOk = !ibanNormalizado || esIbanCostaRicaValido(ibanNormalizado);
+
+  /** Al elegir un colaborador de Planillas se copian sus datos como punto de partida. */
+  function tomarDeColaborador(id: string) {
+    const colaborador = colaboradores.find((fila) => fila.id === id);
+    if (!colaborador) {
+      setForm({ ...form, planilla_empleado_id: "" });
+      return;
+    }
+    setForm({
+      ...form,
+      planilla_empleado_id: id,
+      cedula: colaborador.cedula,
+      nombre: colaborador.nombre_completo,
+      cuenta_iban: colaborador.iban ?? form.cuenta_iban,
+      extra: colaborador.puesto ?? form.extra,
+    });
+  }
 
   async function guardar() {
     setGuardando(true);
@@ -70,7 +116,12 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
       const res = await fetch(ruta, {
         method: editandoId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, cuenta_cliente: cuentaNormalizada, activo: true }),
+        body: JSON.stringify({
+          ...form,
+          cuenta_iban: ibanNormalizado,
+          planilla_empleado_id: form.planilla_empleado_id || null,
+          activo: true,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "No se pudo guardar.");
@@ -102,6 +153,22 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
           {editandoId ? `Editar ${tipo}` : `Nuevo ${tipo}`}
         </h2>
         <div className="grid gap-3 sm:grid-cols-2">
+          {tipo === "empleado" && colaboradores.length > 0 && (
+            <Field label="Colaborador de Planillas (opcional)">
+              <select
+                className={inputClass}
+                value={form.planilla_empleado_id}
+                onChange={(e) => tomarDeColaborador(e.target.value)}
+              >
+                <option value="">Sin enlazar</option>
+                {colaboradores.map((colaborador) => (
+                  <option key={colaborador.id} value={colaborador.id}>
+                    {colaborador.nombre_completo} · {colaborador.cedula}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <Field label="Cédula">
             <input
               className={inputClass}
@@ -117,12 +184,25 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
               onChange={(e) => setForm({ ...form, nombre: e.target.value })}
             />
           </Field>
-          <Field label="Cuenta cliente (17 dígitos) o IBAN">
+          <Field label="Banco destino">
+            <select
+              className={inputClass}
+              value={form.banco}
+              onChange={(e) => setForm({ ...form, banco: e.target.value })}
+            >
+              {BANCOS_SOPORTADOS.map((banco) => (
+                <option key={banco} value={banco}>
+                  {banco}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="IBAN (opcional, solo de referencia)">
             <input
               className={inputClass}
-              value={form.cuenta_cliente}
-              onChange={(e) => setForm({ ...form, cuenta_cliente: e.target.value })}
-              placeholder="15100010012345678"
+              value={form.cuenta_iban}
+              onChange={(e) => setForm({ ...form, cuenta_iban: e.target.value })}
+              placeholder="CR21015100010012345678"
             />
           </Field>
           <Field label={ETIQUETA_EXTRA[tipo]}>
@@ -134,20 +214,16 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
           </Field>
         </div>
 
-        {form.cuenta_cliente && !cuentaOk && (
-          <Alert>
-            El BNCR exige la cuenta cliente de 17 dígitos. Pegando el IBAN de 22 (CR…) se convierte
-            automáticamente.
-          </Alert>
-        )}
-        {form.cuenta_cliente && cuentaOk && cuentaNormalizada !== form.cuenta_cliente.trim() && (
-          <Alert tone="info">Se guardará como cuenta cliente: {cuentaNormalizada}</Alert>
-        )}
+        {!ibanOk && <Alert>El IBAN debe ser CR seguido de 20 dígitos (22 en total).</Alert>}
+        <Alert tone="info">
+          El archivo del BNCR identifica al beneficiario con el código de su banco y la cédula: el
+          IBAN queda como referencia para que puedas verificar la cuenta.
+        </Alert>
 
         <div className="flex gap-2">
           <Button
             onClick={() => void guardar()}
-            disabled={guardando || !form.nombre.trim() || !form.cedula.trim() || !cuentaOk}
+            disabled={guardando || !form.nombre.trim() || !form.cedula.trim() || !ibanOk}
             className="flex items-center gap-2"
           >
             <UserPlus size={16} />
@@ -189,7 +265,7 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
           <EmptyState
             icon={Users}
             titulo="Sin registros"
-            detalle="Agrega el primer beneficiario con su cuenta cliente de 17 dígitos."
+            detalle="Agrega el primer beneficiario con su cédula y su banco destino."
           />
         ) : (
           <ul className="divide-y divide-slate-100">
@@ -202,7 +278,8 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
                       {!beneficiario.activo && " (inactivo)"}
                     </p>
                     <p className="font-mono text-xs text-slate-500">
-                      {beneficiario.cedula} · {beneficiario.cuenta_cliente}
+                      {beneficiario.cedula} · {beneficiario.banco}
+                      {beneficiario.cuenta_iban ? ` · ${beneficiario.cuenta_iban}` : ""}
                     </p>
                   </div>
                   <div className="flex gap-2">
@@ -222,8 +299,10 @@ export function CatalogoBeneficiarios({ tipo }: { tipo: TipoBeneficiario }) {
                         setForm({
                           cedula: beneficiario.cedula,
                           nombre: beneficiario.nombre,
-                          cuenta_cliente: beneficiario.cuenta_cliente,
+                          banco: beneficiario.banco,
+                          cuenta_iban: beneficiario.cuenta_iban ?? "",
                           extra: (beneficiario.puesto ?? beneficiario.correo ?? "") || "",
+                          planilla_empleado_id: beneficiario.planilla_empleado_id ?? "",
                         });
                       }}
                     >

@@ -114,17 +114,17 @@ export function HistorialLotes() {
               {detalle?.id === lote.id && (
                 <div className="space-y-3 rounded-xl bg-slate-50 p-3">
                   <ul className="space-y-2 text-xs text-slate-600">
-                    {detalle.bncr_detalles_pago
+                    {detalle.sistema_pagos_bncr
                       .slice()
                       .sort((a, b) => a.linea - b.linea)
                       .map((fila) => (
                         <li key={fila.id}>
                           <p className="font-semibold text-slate-800">
-                            {fila.linea}. {fila.nombre_beneficiario} —{" "}
-                            {formatearMonto(fila.monto_centimos, lote.moneda)}
+                            {fila.linea}. {fila.nombre_empleado} —{" "}
+                            {formatearMonto(Math.round(fila.monto_pagar * 100), lote.moneda)}
                           </p>
                           <p className="font-mono">
-                            {fila.cuenta_cliente} · {fila.concepto}
+                            {fila.cedula} · {fila.banco} · {fila.concepto}
                           </p>
                           {(fila.bncr_rubros_pago ?? []).map((rubro) => (
                             <p key={rubro.id} className="pl-3">

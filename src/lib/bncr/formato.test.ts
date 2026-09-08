@@ -2,39 +2,29 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  ANCHO_LINEA,
   ErrorFormatoBncr,
-  LAYOUT_TIPO_1,
-  LAYOUT_TIPO_2,
-  LAYOUT_TIPO_3,
-  LAYOUT_TIPO_4,
   aCentimos,
-  calcularChecksum,
+  codigoBancoDesde,
   construirArchivoBncr,
-  esCuentaClienteValida,
-  largoLinea,
+  esIbanCostaRicaValido,
   nombreArchivoLote,
-  normalizarCuentaCliente,
+  normalizarIban,
   normalizarTexto,
   type LoteBncr,
 } from "./formato";
 
-const CUENTA_A = "15100010012345678";
-const CUENTA_B = "15100010087654321";
-
 function lote(extra: Partial<LoteBncr> = {}): LoteBncr {
   return {
-    cedulaEmpresa: "3101123456",
-    nombreEmpresa: "Distribuidora Ñandú S.A.",
-    cuentaDebito: CUENTA_A,
-    moneda: "CRC",
+    numeroCliente: "123456",
+    cuentaOrigen: "100234567",
     fechaAplicacion: "2026-03-05",
-    consecutivo: 12,
     descripcion: "Planilla quincenal",
     detalles: [
       {
-        cuentaCliente: CUENTA_B,
         cedula: "1-0234-0567",
         nombre: "José Fernández Ávila",
+        banco: "Banco Nacional",
         concepto: "Salario base + lavado de carro",
         montoCentimos: 45_000_00,
       },
@@ -48,11 +38,17 @@ test("normalizarTexto pasa a mayúsculas sin tildes ni caracteres raros", () => 
   assert.equal(normalizarTexto("Peña  &  Cía"), "PENA CIA");
 });
 
-test("la cuenta cliente son 17 dígitos y el IBAN se normaliza a esos 17", () => {
-  assert.ok(esCuentaClienteValida(CUENTA_A));
-  assert.ok(!esCuentaClienteValida("CR21015100010012345678"));
-  assert.equal(normalizarCuentaCliente("CR21 0151 0001 0012 3456 78"), CUENTA_A);
-  assert.equal(normalizarCuentaCliente(CUENTA_A), CUENTA_A);
+test("el IBAN de Costa Rica se normaliza y se valida a 22 caracteres", () => {
+  assert.equal(normalizarIban("cr21 0151 0001 0012 3456 78"), "CR21015100010012345678");
+  assert.ok(esIbanCostaRicaValido("CR21 0151 0001 0012 3456 78"));
+  assert.ok(!esIbanCostaRicaValido("15100010012345678"));
+});
+
+test("el banco se traduce a su código de 3 dígitos sin importar tildes ni mayúsculas", () => {
+  assert.equal(codigoBancoDesde("Banco Nacional"), "056");
+  assert.equal(codigoBancoDesde("BAC San José"), "002");
+  assert.equal(codigoBancoDesde("bcr"), "021");
+  assert.equal(codigoBancoDesde("Banco Lafise"), null);
 });
 
 test("aCentimos evita el error de coma flotante", () => {
@@ -60,65 +56,82 @@ test("aCentimos evita el error de coma flotante", () => {
   assert.equal(aCentimos(0.07), 7);
 });
 
-test("cada línea mide exactamente lo que dice su layout y el archivo cierra con CRLF", () => {
+test("todas las líneas miden 68 caracteres y el archivo cierra con CRLF", () => {
   const archivo = construirArchivoBncr(lote());
-  const [encabezado, origen, detalle, cierre] = archivo.lineas;
 
-  assert.equal(encabezado.length, largoLinea(LAYOUT_TIPO_1));
-  assert.equal(origen.length, largoLinea(LAYOUT_TIPO_2));
-  assert.equal(detalle.length, largoLinea(LAYOUT_TIPO_3));
-  assert.equal(cierre.length, largoLinea(LAYOUT_TIPO_4));
+  // Encabezado + débito + un crédito + cierre.
+  assert.equal(archivo.lineas.length, 4);
+  for (const linea of archivo.lineas) assert.equal(linea.length, ANCHO_LINEA);
   assert.equal(archivo.contenido, `${archivo.lineas.join("\r\n")}\r\n`);
 });
 
-test("el encabezado lleva la fecha compacta y el detalle el monto en céntimos a 12 dígitos", () => {
-  const archivo = construirArchivoBncr(lote());
-  const encabezado = archivo.lineas[0];
-  const detalle = archivo.lineas[2];
+test("el encabezado lleva el número de cliente y la fecha en ddmmyyyy", () => {
+  const [encabezado] = construirArchivoBncr(lote()).lineas;
 
   assert.equal(encabezado.slice(0, 1), "1");
-  assert.equal(encabezado.slice(53, 61), "20260305");
-  assert.equal(detalle.slice(1, 7), "000001");
-  assert.equal(detalle.slice(7, 24), CUENTA_B);
-  assert.equal(detalle.slice(76, 88), "000004500000");
-  // El concepto ocupa siempre los últimos 30 caracteres, en mayúsculas.
-  assert.equal(detalle.slice(-30), "SALARIO BASE LAVADO DE CARRO  ");
+  assert.equal(encabezado.slice(1, 7), "123456");
+  assert.equal(encabezado.slice(7, 15), "05032026");
+  assert.equal(encabezado.slice(15), "0".repeat(53));
 });
 
-test("el tipo 2 y el tipo 4 cuadran con la suma de los detalles", () => {
+test("el crédito lleva banco, cédula a 9 dígitos, secuencia, monto y concepto", () => {
+  const credito = construirArchivoBncr(lote()).lineas[2];
+
+  assert.equal(credito.slice(0, 1), "3");
+  assert.equal(credito.slice(1, 4), "056");
+  assert.equal(credito.slice(4, 9), "20001");
+  assert.equal(credito.slice(9, 18), "102340567");
+  assert.equal(credito.slice(18, 24), "000002");
+  assert.equal(credito.slice(24, 36), "000004500000");
+  assert.equal(credito.slice(36, 66), "SALARIO BASE LAVADO DE CARRO  ");
+  assert.equal(credito.slice(66), "00");
+});
+
+test("el débito y el cierre cuadran con la suma de los créditos", () => {
   const archivo = construirArchivoBncr(
     lote({
       detalles: [
-        { cuentaCliente: CUENTA_B, cedula: "102340567", nombre: "Ana Mora", concepto: "Salario", montoCentimos: 100_00 },
-        { cuentaCliente: CUENTA_A, cedula: "203450678", nombre: "Luis Rojas", concepto: "Salario", montoCentimos: 250_00 },
+        { cedula: "102340567", nombre: "Ana Mora", banco: "BCR", concepto: "Salario", montoCentimos: 100_00 },
+        { cedula: "203450678", nombre: "Luis Rojas", banco: "BAC", concepto: "Salario", montoCentimos: 250_00 },
       ],
     }),
   );
 
   assert.equal(archivo.totalCentimos, 350_00);
   assert.equal(archivo.cantidadDetalles, 2);
-  assert.equal(archivo.lineas[1].slice(18, 30), "000000035000");
-  assert.equal(archivo.lineas[1].slice(30, 36), "000002");
-  assert.equal(archivo.lineas[archivo.lineas.length - 1].slice(1, 19), "000002000000035000");
+
+  const debito = archivo.lineas[1];
+  assert.equal(debito.slice(0, 9), "2" + "056" + "10001");
+  assert.equal(debito.slice(18, 24), "000001");
+  assert.equal(debito.slice(24, 36), "000000035000");
+
+  const cierre = archivo.lineas[archivo.lineas.length - 1];
+  assert.equal(cierre.slice(0, 8), "40000002");
+  assert.equal(cierre.slice(8, 26), "000000000000035000");
 });
 
-test("el checksum es determinista y depende de montos y cuentas", () => {
-  const detalles = lote().detalles;
-  assert.equal(calcularChecksum(detalles), calcularChecksum(detalles));
-  assert.notEqual(
-    calcularChecksum(detalles),
-    calcularChecksum([{ ...detalles[0], montoCentimos: detalles[0].montoCentimos + 1 }]),
+test("la secuencia de los créditos arranca en 2 porque el débito ocupa la 1", () => {
+  const archivo = construirArchivoBncr(
+    lote({
+      detalles: [
+        { cedula: "102340567", nombre: "Ana Mora", banco: "BCR", concepto: "Salario", montoCentimos: 100_00 },
+        { cedula: "203450678", nombre: "Luis Rojas", banco: "BAC", concepto: "Salario", montoCentimos: 250_00 },
+      ],
+    }),
   );
+
+  assert.equal(archivo.lineas[2].slice(18, 24), "000002");
+  assert.equal(archivo.lineas[3].slice(18, 24), "000003");
 });
 
-test("rechaza lotes vacíos, IBAN en el detalle y montos no positivos", () => {
+test("rechaza lotes vacíos, bancos desconocidos, montos no positivos y fechas mal escritas", () => {
   assert.throws(() => construirArchivoBncr(lote({ detalles: [] })), ErrorFormatoBncr);
   assert.throws(
     () =>
       construirArchivoBncr(
         lote({
           detalles: [
-            { cuentaCliente: "CR21015100010012345678", cedula: "1", nombre: "Ana", concepto: "Salario", montoCentimos: 100 },
+            { cedula: "102340567", nombre: "Ana", banco: "Banco Lafise", concepto: "Salario", montoCentimos: 100 },
           ],
         }),
       ),
@@ -128,15 +141,21 @@ test("rechaza lotes vacíos, IBAN en el detalle y montos no positivos", () => {
     () =>
       construirArchivoBncr(
         lote({
-          detalles: [{ cuentaCliente: CUENTA_B, cedula: "1", nombre: "Ana", concepto: "Salario", montoCentimos: 0 }],
+          detalles: [
+            { cedula: "102340567", nombre: "Ana", banco: "BCR", concepto: "Salario", montoCentimos: 0 },
+          ],
         }),
       ),
     ErrorFormatoBncr,
   );
   assert.throws(() => construirArchivoBncr(lote({ fechaAplicacion: "05/03/2026" })), ErrorFormatoBncr);
+  assert.throws(() => construirArchivoBncr(lote({ numeroCliente: "" })), ErrorFormatoBncr);
 });
 
 test("el nombre del archivo incluye tipo, fecha y consecutivo", () => {
-  assert.equal(nombreArchivoLote("planilla", 12, "2026-03-05"), "BNCR_PLANILLA_20260305_000012.txt");
-  assert.equal(nombreArchivoLote("proveedores", 3, "2026-03-05", "env"), "BNCR_PROVEEDORES_20260305_000003.env");
+  assert.equal(nombreArchivoLote("planilla", 12, "2026-03-05"), "BNCR_PLANILLA_05032026_000012.env");
+  assert.equal(
+    nombreArchivoLote("proveedores", 3, "2026-03-05", "txt"),
+    "BNCR_PROVEEDORES_05032026_000003.txt",
+  );
 });
